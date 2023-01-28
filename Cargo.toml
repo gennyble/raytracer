@@ -8,4 +8,6 @@ edition = "2018"
 
 [dependencies]
 png = "0.16"
-rand= "*"
+rand = "*"
+softbuffer = { git = "https://github.com/rust-windowing/softbuffer" }
+winit = "0.27.5"
