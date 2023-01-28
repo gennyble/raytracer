@@ -2,7 +2,7 @@ use std::{
 	cell::UnsafeCell,
 	fs::File,
 	io::{stdout, Write},
-	ops::Deref,
+	ops::{Deref, DerefMut},
 	path::Path,
 	sync::{
 		atomic::{AtomicBool, Ordering},
@@ -67,15 +67,15 @@ impl Image {
 	/// The [ImageBlock] that this function returns are wildely unsafe, lol. Do not let this struct
 	/// drop before they do.
 	pub fn make_blocks(&mut self) -> Vec<ImageBlock> {
-		let widths = self.width as usize / 10;
-		let heights = self.height as usize / 10;
+		let widths = self.width as usize / 20;
+		let heights = self.height as usize / 20;
 
 		let ptr = self.buffer.as_mut_ptr();
 
 		let mut blocks = vec![];
-		for block_id in 0..100 {
-			let block_x = block_id % 10;
-			let block_y = block_id / 10;
+		for block_id in 0..400 {
+			let block_x = block_id % 20;
+			let block_y = block_id / 20;
 
 			let img_x = block_x * widths;
 			let img_y = (block_y * heights) * self.width as usize;
@@ -98,7 +98,9 @@ impl Image {
 			blocks.push(ImageBlock {
 				width: widths as u16,
 				height: heights as u16,
-				lines: lines,
+				x: block_x as u16 * widths as u16,
+				y: block_y as u16 * heights as u16,
+				lines,
 			})
 		}
 
@@ -111,6 +113,8 @@ pub struct ImageBlock {
 	width: u16,
 	// The number of lines
 	height: u16,
+	x: u16,
+	y: u16,
 	lines: Vec<&'static mut [u32]>,
 }
 
@@ -167,6 +171,7 @@ impl BlockSaftey {
 
 pub struct Worker {
 	elp: EventLoopProxy<()>,
+	renderer: Arc<RwLock<Option<Renderer>>>,
 	block_saftey: BlockSaftey,
 	block_pool: Arc<RwLock<Vec<ImageBlock>>>,
 }
@@ -185,13 +190,22 @@ impl Worker {
 			match self.get_block() {
 				None => (),
 				Some(mut block) => {
-					let block_lock = self.block_saftey.slices_valid_lock.write().unwrap();
-					if *block_lock {
-						for px in 0..block.size() {
-							block.set_pixel_idx(px, 0xFF, 0xFF, 0xFF)
-						}
+					if *self.write_safe().deref() {
+						let renderer = self.renderer.read().unwrap();
+						if let Some(renderer) = renderer.deref() {
+							println!("Rendering");
+							for px in 0..block.size() {
+								let x = (px & block.width as usize) + block.x as usize;
+								let y = (px / block.width as usize) + block.y as usize;
 
-						self.elp.send_event(()).unwrap();
+								let traced = renderer.pixel(x, y);
+
+								block.set_pixel_idx(px, traced.r, traced.g, traced.b)
+							}
+
+							println!("Sent redraw");
+							self.elp.send_event(()).unwrap();
+						}
 					}
 				}
 			}
@@ -219,6 +233,7 @@ fn main() {
 
 	let block_saftey = BlockSaftey::new();
 	let mut image: Option<Image> = None;
+	let mut renderer: Arc<RwLock<Option<Renderer>>> = Arc::new(RwLock::new(None));
 	let jobs: Arc<RwLock<Vec<ImageBlock>>> = Arc::new(RwLock::new(vec![]));
 
 	let count = std::thread::available_parallelism().unwrap();
@@ -228,6 +243,7 @@ fn main() {
 	for _ in 0..count.get() {
 		let worker = Worker {
 			elp: event_loop.create_proxy(),
+			renderer: renderer.clone(),
 			block_saftey: block_saftey.clone(),
 			block_pool: jobs.clone(),
 		};
@@ -271,19 +287,27 @@ fn main() {
 
 				let mut blocks = image.as_mut().unwrap().make_blocks();
 				blocks.shuffle(&mut rand::thread_rng());
-
+				job_lock.clear();
 				job_lock.extend(blocks);
+
+				let aspect = size.width as f64 / size.height as f64;
+				let (world, camera) = complex_random_scene(aspect);
+				let viewport = Viewport::new(
+					size.width as usize,
+					size.height as usize,
+					SAMPLES_PER_PIXEL,
+					MAX_DEPTH,
+				);
+				let created_renderer = Renderer::new(viewport, camera, world);
+				let mut render_lock = renderer.write().unwrap();
+				*render_lock.deref_mut() = Some(created_renderer);
+
 				block_saftey.validate_slices();
 				println!("Resize reset!");
 			}
 			_ => (),
 		}
 	});
-
-	//Worldgen!
-	//let (world, camera) = complex_random_scene(ASPECT_RATIO);
-	//let viewport = Viewport::new(IMAGE_WIDTH, IMAGE_HEIGHT, SAMPLES_PER_PIXEL, MAX_DEPTH);
-	//let renderer = Renderer::new(viewport, camera, world);
 }
 
 /*

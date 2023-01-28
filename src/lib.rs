@@ -27,6 +27,7 @@ impl Renderer {
 	}
 
 	pub fn pixel(&self, x: usize, y: usize) -> RGBColour {
+		//println!("{x} + {y}");
 		let mut rng = rand::thread_rng();
 
 		let mut pixel_colour = Colour::default();
