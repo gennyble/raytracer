@@ -26,7 +26,7 @@ use winit::{
 };
 
 //Image parameters
-const SAMPLES_PER_PIXEL: usize = 5;
+const SAMPLES_PER_PIXEL: usize = 2;
 const MAX_DEPTH: usize = 10;
 
 pub struct Image {
@@ -151,6 +151,13 @@ impl ImageBlock {
 
 #[derive(Clone)]
 pub struct BlockSaftey {
+	/// okay, whew, what does this do?
+	///
+	/// the RwLock is here because we don't want to be able to change the buffer in between the
+	/// worker checking that the slice is valid and the slice being invalidated. the workers take
+	/// a `read` out, blocking any `write`. when the underlying image changes, the code that does
+	/// that is supposed to take out a `write`, which waits for the `read` to clear. it then sets
+	/// the bool to false, indicating to workers that these slices are NOT safe.
 	pub slices_valid_lock: Arc<RwLock<bool>>,
 }
 
@@ -182,6 +189,7 @@ impl Worker {
 		std::thread::spawn(move || self.work())
 	}
 
+	/// takes out a read lock, blocking any write
 	pub fn write_safe(&self) -> RwLockReadGuard<bool> {
 		self.block_saftey.slices_valid_lock.read().unwrap()
 	}
@@ -191,6 +199,7 @@ impl Worker {
 			match self.get_block() {
 				None => (),
 				Some(mut block) => {
+					// only act if the slice is inicated as safe
 					if *self.write_safe().deref() {
 						let renderer = self.renderer.read().unwrap();
 						if let Some(renderer) = renderer.deref() {
@@ -229,7 +238,7 @@ impl Worker {
 fn main() {
 	let event_loop = EventLoop::new();
 	let window = WindowBuilder::new()
-		.with_inner_size(PhysicalSize::new(640, 480))
+		.with_inner_size(PhysicalSize::new(240, 240))
 		.build(&event_loop)
 		.unwrap();
 
@@ -323,46 +332,3 @@ fn main() {
 		}
 	});
 }
-
-/*
-fn render_threaded_lines(renderer: Renderer) -> Vec<u8> {
-	let arc_renderer = Arc::new(renderer);
-	let mut threads = vec![];
-
-	for thread_num in 0..NUM_THREADS {
-		let cloned = arc_renderer.clone();
-		threads.push(thread::spawn(move || render_lines(cloned, thread_num)));
-	}
-
-	let mut component_vec = vec![0; IMAGE_WIDTH * IMAGE_HEIGHT * 3];
-
-	//wait for all threads to finish execution, then fill the component vector
-	for handle in threads {
-		for (colours, row) in handle.join().unwrap() {
-			for (row_index, component) in colours.into_iter().enumerate() {
-				component_vec[(IMAGE_WIDTH * (IMAGE_HEIGHT - 1 - row)) * 3 + row_index] = component;
-			}
-		}
-	}
-
-	println!("\rFinished rendering!                         ");
-	//todo: why does this still print the last number?
-	//gen: because the number starts at col 20 in the `print!` and "Finished rendering!"
-	//only takes 19 characters, leaving the space and number in place :D
-
-	component_vec
-}
-
-fn render_lines(renderer: Arc<Renderer>, thread_num: usize) -> Vec<(Vec<u8>, usize)> {
-	let mut lines = Vec::with_capacity(IMAGE_HEIGHT / NUM_THREADS);
-	for j in (0..IMAGE_HEIGHT).rev() {
-		if j % NUM_THREADS != thread_num {
-			continue;
-		}
-		print!("\rNow rendering line: {} ", j);
-		stdout().flush().unwrap();
-		lines.push((renderer.line(j), j));
-	}
-	lines
-}
-*/
