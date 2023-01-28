@@ -19,13 +19,14 @@ use png::Encoder;
 use rand::seq::SliceRandom;
 use raytracer::{worlds::*, Renderer, Viewport};
 use winit::{
+	dpi::PhysicalSize,
 	event::{Event, WindowEvent},
 	event_loop::{ControlFlow, EventLoop, EventLoopProxy},
 	window::{Window, WindowBuilder},
 };
 
 //Image parameters
-const SAMPLES_PER_PIXEL: usize = 10;
+const SAMPLES_PER_PIXEL: usize = 5;
 const MAX_DEPTH: usize = 10;
 
 pub struct Image {
@@ -195,12 +196,13 @@ impl Worker {
 						if let Some(renderer) = renderer.deref() {
 							println!("Rendering");
 							for px in 0..block.size() {
-								let x = (px & block.width as usize) + block.x as usize;
-								let y = (px / block.width as usize) + block.y as usize;
+								let x = px % block.width as usize;
+								let y = px / block.width as usize;
 
-								let traced = renderer.pixel(x, y);
+								let traced =
+									renderer.pixel(x + block.x as usize, y + block.y as usize);
 
-								block.set_pixel_idx(px, traced.r, traced.g, traced.b)
+								block.set_pixel(x as u16, y as u16, traced.r, traced.g, traced.b)
 							}
 
 							println!("Sent redraw");
@@ -226,7 +228,10 @@ impl Worker {
 
 fn main() {
 	let event_loop = EventLoop::new();
-	let window = WindowBuilder::new().build(&event_loop).unwrap();
+	let window = WindowBuilder::new()
+		.with_inner_size(PhysicalSize::new(640, 480))
+		.build(&event_loop)
+		.unwrap();
 
 	let context = unsafe { softbuffer::Context::new(&window) }.unwrap();
 	let mut surface = unsafe { softbuffer::Surface::new(&context, &window) }.unwrap();
@@ -241,6 +246,7 @@ fn main() {
 	let mut handles = vec![];
 
 	for _ in 0..count.get() {
+		//std::thread::sleep(Duration::from_secs_f64(0.125));
 		let worker = Worker {
 			elp: event_loop.create_proxy(),
 			renderer: renderer.clone(),
@@ -251,16 +257,24 @@ fn main() {
 		handles.push(worker.spawn())
 	}
 
+	let mut last = Instant::now();
+
 	event_loop.run(move |event, _, control_flow| {
-		*control_flow = ControlFlow::Wait;
+		*control_flow = ControlFlow::Poll;
 
 		match event {
+			Event::MainEventsCleared => {
+				if last.elapsed().as_millis() >= 50 {
+					last = Instant::now();
+					window.request_redraw()
+				}
+			}
 			Event::RedrawRequested(_window_id) => {
 				match image.as_ref() {
 					None => (),
 					Some(img) => surface.set_buffer(img.buffer(), img.width(), img.height()),
 				}
-				println!("drawn");
+				//println!("drawn");
 			}
 			Event::WindowEvent {
 				event: WindowEvent::CloseRequested,

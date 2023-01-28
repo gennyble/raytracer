@@ -33,7 +33,8 @@ impl Renderer {
 		let mut pixel_colour = Colour::default();
 		for _ in 0..self.viewport.samples {
 			let u = (x as f64 + rng.gen::<f64>()) / (self.viewport.width - 1) as f64;
-			let v = (y as f64 + rng.gen::<f64>()) / (self.viewport.height - 1) as f64;
+			let v = (self.viewport.height as f64 - 1.0 - y as f64 + rng.gen::<f64>())
+				/ (self.viewport.height - 1) as f64;
 			let ray = self.camera.get_ray(u, v);
 
 			pixel_colour = pixel_colour + ray.colour(&self.world, self.viewport.depth);
