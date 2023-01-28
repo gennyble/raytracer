@@ -14,8 +14,8 @@ use raytracer::{worlds::*, Renderer, Viewport};
 const ASPECT_RATIO: f64 = 16.0 / 9.0;
 const IMAGE_WIDTH: usize = 1920;
 const IMAGE_HEIGHT: usize = (IMAGE_WIDTH as f64 / ASPECT_RATIO) as usize;
-const SAMPLES_PER_PIXEL: usize = 500;
-const MAX_DEPTH: usize = 100;
+const SAMPLES_PER_PIXEL: usize = 10;
+const MAX_DEPTH: usize = 10;
 const NUM_THREADS: usize = 12;
 
 fn main() {
@@ -70,8 +70,10 @@ fn render_threaded_lines(renderer: Renderer) -> Vec<u8> {
         }
     }
 
-    println!("\rFinished rendering!");
+    println!("\rFinished rendering!                         ");
     //todo: why does this still print the last number?
+    //gen: because the number starts at col 20 in the `print!` and "Finished rendering!"
+    //only takes 19 characters, leaving the space and number in place :D
 
     component_vec
 }
