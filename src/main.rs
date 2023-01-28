@@ -25,7 +25,7 @@ use winit::{
 };
 
 //Image parameters
-const SAMPLES_PER_PIXEL: usize = 10;
+const SAMPLES_PER_PIXEL: usize = 2;
 const MAX_DEPTH: usize = 10;
 
 pub struct Image {
@@ -66,77 +66,42 @@ impl Image {
 
 	/// The [ImageBlock] that this function returns are wildely unsafe, lol. Do not let this struct
 	/// drop before they do.
-	pub fn make_blocks(&mut self) -> Vec<ImageBlock> {
-		let widths = self.width as usize / 20;
-		let heights = self.height as usize / 20;
-
+	pub fn make_blocks(&mut self) -> Vec<ImageLine> {
 		let ptr = self.buffer.as_mut_ptr();
 
-		let mut blocks = vec![];
-		for block_id in 0..400 {
-			let block_x = block_id % 20;
-			let block_y = block_id / 20;
+		let mut lines = vec![];
+		for y in 0..self.height {
+			let slice_start = y as usize * self.width as usize;
 
-			let img_x = block_x * widths;
-			let img_y = (block_y * heights) * self.width as usize;
+			let line = unsafe {
+				let start = ptr.add(slice_start);
+				std::slice::from_raw_parts_mut(start, self.width as usize)
+			};
 
-			println!("{block_x} ({img_x}) {block_y} ({img_y})");
-
-			let slice_start = img_x + img_y;
-
-			let mut lines = vec![];
-			for y in 0..heights {
-				let offset = y * self.width as usize;
-
-				unsafe {
-					let start = ptr.add(slice_start + offset);
-					let line = std::slice::from_raw_parts_mut(start, widths);
-					lines.push(line);
-				}
-			}
-
-			blocks.push(ImageBlock {
-				width: widths as u16,
-				height: heights as u16,
-				x: block_x as u16 * widths as u16,
-				y: block_y as u16 * heights as u16,
-				lines,
+			lines.push(ImageLine {
+				width: self.width,
+				y: self.height - 1 - y,
+				line,
 			})
 		}
 
-		blocks
+		lines
 	}
 }
 
-pub struct ImageBlock {
-	// The width of each line
+pub struct ImageLine {
+	// The width of the line
 	width: u16,
-	// The number of lines
-	height: u16,
-	x: u16,
+	// Which line
 	y: u16,
-	lines: Vec<&'static mut [u32]>,
+	line: &'static mut [u32],
 }
 
-impl ImageBlock {
-	pub fn size(&self) -> usize {
-		self.width as usize * self.height as usize
-	}
-
+impl ImageLine {
 	#[inline]
-	pub fn set_pixel(&mut self, x: u16, y: u16, r: u8, g: u8, b: u8) {
-		if x < self.width && y < self.height {
-			self.lines[y as usize][x as usize] = Self::pack_pixel(r, g, b);
-		}
-	}
-
-	#[inline]
-	pub fn set_pixel_idx(&mut self, idx: usize, r: u8, g: u8, b: u8) {
-		if idx < self.size() {
-			let x = idx % self.width as usize;
-			let y = idx / self.width as usize;
-			//println!("{x} - {y}");
-			self.lines[y][x] = Self::pack_pixel(r, g, b);
+	pub fn set_pixel(&mut self, x: u16, r: u8, g: u8, b: u8) {
+		if x < self.width {
+			self.line[x as usize] = Self::pack_pixel(r, g, b);
 		}
 	}
 
@@ -173,7 +138,7 @@ pub struct Worker {
 	elp: EventLoopProxy<()>,
 	renderer: Arc<RwLock<Option<Renderer>>>,
 	block_saftey: BlockSaftey,
-	block_pool: Arc<RwLock<Vec<ImageBlock>>>,
+	block_pool: Arc<RwLock<Vec<ImageLine>>>,
 }
 
 impl Worker {
@@ -194,13 +159,10 @@ impl Worker {
 						let renderer = self.renderer.read().unwrap();
 						if let Some(renderer) = renderer.deref() {
 							println!("Rendering");
-							for px in 0..block.size() {
-								let x = (px & block.width as usize) + block.x as usize;
-								let y = (px / block.width as usize) + block.y as usize;
+							for x in 0..block.width {
+								let traced = renderer.pixel(x as usize, block.y as usize);
 
-								let traced = renderer.pixel(x, y);
-
-								block.set_pixel_idx(px, traced.r, traced.g, traced.b)
+								block.set_pixel(x, traced.r, traced.g, traced.b)
 							}
 
 							println!("Sent redraw");
@@ -214,7 +176,7 @@ impl Worker {
 		}
 	}
 
-	pub fn get_block(&self) -> Option<ImageBlock> {
+	pub fn get_block(&self) -> Option<ImageLine> {
 		if *self.write_safe().deref() {
 			let mut pool_lock = self.block_pool.write().unwrap();
 			return pool_lock.pop();
@@ -234,7 +196,7 @@ fn main() {
 	let block_saftey = BlockSaftey::new();
 	let mut image: Option<Image> = None;
 	let mut renderer: Arc<RwLock<Option<Renderer>>> = Arc::new(RwLock::new(None));
-	let jobs: Arc<RwLock<Vec<ImageBlock>>> = Arc::new(RwLock::new(vec![]));
+	let jobs: Arc<RwLock<Vec<ImageLine>>> = Arc::new(RwLock::new(vec![]));
 
 	let count = std::thread::available_parallelism().unwrap();
 	println!("Available Parallelism: {count}");
@@ -309,46 +271,3 @@ fn main() {
 		}
 	});
 }
-
-/*
-fn render_threaded_lines(renderer: Renderer) -> Vec<u8> {
-	let arc_renderer = Arc::new(renderer);
-	let mut threads = vec![];
-
-	for thread_num in 0..NUM_THREADS {
-		let cloned = arc_renderer.clone();
-		threads.push(thread::spawn(move || render_lines(cloned, thread_num)));
-	}
-
-	let mut component_vec = vec![0; IMAGE_WIDTH * IMAGE_HEIGHT * 3];
-
-	//wait for all threads to finish execution, then fill the component vector
-	for handle in threads {
-		for (colours, row) in handle.join().unwrap() {
-			for (row_index, component) in colours.into_iter().enumerate() {
-				component_vec[(IMAGE_WIDTH * (IMAGE_HEIGHT - 1 - row)) * 3 + row_index] = component;
-			}
-		}
-	}
-
-	println!("\rFinished rendering!                         ");
-	//todo: why does this still print the last number?
-	//gen: because the number starts at col 20 in the `print!` and "Finished rendering!"
-	//only takes 19 characters, leaving the space and number in place :D
-
-	component_vec
-}
-
-fn render_lines(renderer: Arc<Renderer>, thread_num: usize) -> Vec<(Vec<u8>, usize)> {
-	let mut lines = Vec::with_capacity(IMAGE_HEIGHT / NUM_THREADS);
-	for j in (0..IMAGE_HEIGHT).rev() {
-		if j % NUM_THREADS != thread_num {
-			continue;
-		}
-		print!("\rNow rendering line: {} ", j);
-		stdout().flush().unwrap();
-		lines.push((renderer.line(j), j));
-	}
-	lines
-}
-*/
